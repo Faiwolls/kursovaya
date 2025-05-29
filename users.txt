@@ -1,2 +1,3 @@
-nazar:5678:BAZA,
-ilya:6789:BAZA,
+nazar:5678:BAZA,KUROCHKA,
+ilya:6789:BAZA,KUROCHKA,
+shnyaga:7890:BAZA,

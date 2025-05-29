@@ -1,1 +1,2 @@
-BAZA:ilya,nazar,
+BAZA:ilya,nazar,shnyaga,
+KUROCHKA:ilya,nazar,

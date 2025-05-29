@@ -1,4 +1,4 @@
-﻿// server.cpp - Кроссплатформенный сервер мессенджера
+﻿// server.cpp - Cross-platform messenger server
 #include <iostream>
 #include <unordered_map>
 #include <unordered_set>
@@ -12,7 +12,7 @@
 #include <ctime>
 #include <cstring>
 #include <atomic>
-#include <exception> // Добавлен заголовок
+#include <exception>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -58,16 +58,21 @@ void send_to_client(SOCKET_TYPE socket, const std::string& message) {
     send(socket, msg.c_str(), msg.size(), 0);
 }
 
-void broadcast_to_group(const std::string& group_name, const std::string& sender, const std::string& message) {
+void broadcast_to_group(const std::string& group_name, const std::string& sender, const std::string& message, bool is_system = false) {
     std::lock_guard<std::mutex> lock_online(online_mutex);
     std::lock_guard<std::mutex> lock_groups(groups_mutex);
 
     if (groups.find(group_name) == groups.end()) return;
 
     for (const auto& member : groups[group_name]) {
-        if (member == sender) continue;
         if (online_users.find(member) != online_users.end()) {
-            std::string full_msg = "[GROUP:" + group_name + "] " + sender + " (" + get_current_time() + "): " + message;
+            std::string full_msg;
+            if (is_system) {
+                full_msg = "[SYSTEM][" + group_name + "] " + message;
+            }
+            else {
+                full_msg = "[GROUP][" + group_name + "] " + sender + " (" + get_current_time() + "): " + message;
+            }
             send_to_client(online_users[member], full_msg);
         }
     }
@@ -86,7 +91,6 @@ std::string read_socket(SOCKET_TYPE socket) {
     return data.substr(0, data.find('\n'));
 }
 
-// ФИКС: Убраны блокировки из save_data()
 void save_data() {
     try {
         std::ofstream users_file("users.txt");
@@ -111,10 +115,10 @@ void save_data() {
             groups_file << "\n";
         }
 
-        std::cout << "Data saved successfully\n";
+        std::cout << "Data saved successfully" << std::endl;
     }
     catch (const std::exception& e) {
-        std::cerr << "Error saving data: " << e.what() << "\n";
+        std::cerr << "Error saving data: " << e.what() << std::endl;
     }
 }
 
@@ -177,10 +181,10 @@ void load_data() {
             }
         }
 
-        std::cout << "Data loaded successfully\n";
+        std::cout << "Data loaded successfully" << std::endl;
     }
     catch (const std::exception& e) {
-        std::cerr << "Error loading data: " << e.what() << "\n";
+        std::cerr << "Error loading data: " << e.what() << std::endl;
     }
 }
 
@@ -201,13 +205,13 @@ void handle_client(SOCKET_TYPE client_socket) {
 
                 if (command == "/register") {
                     if (users.find(username) != users.end()) {
-                        send_to_client(client_socket, "ERROR: Username already exists");
+                        send_to_client(client_socket, "ERROR: User already exists");
                     }
                     else {
                         users[username] = { pass, {}, false };
-                        // ФИКС: save_data() вызывается без блокировки
                         save_data();
-                        send_to_client(client_socket, "SUCCESS: Registration successful");
+                        std::cout << "New user registered: " << username << std::endl;
+                        send_to_client(client_socket, "SUCCESS");
                     }
                 }
                 else if (command == "/login") {
@@ -215,7 +219,7 @@ void handle_client(SOCKET_TYPE client_socket) {
                         send_to_client(client_socket, "ERROR: Invalid credentials");
                     }
                     else if (users[username].online) {
-                        send_to_client(client_socket, "ERROR: User already logged in");
+                        send_to_client(client_socket, "ERROR: User already online");
                     }
                     else {
                         users[username].online = true;
@@ -229,7 +233,8 @@ void handle_client(SOCKET_TYPE client_socket) {
                             groups_list += group + ",";
                         }
                         send_to_client(client_socket, groups_list);
-                        send_to_client(client_socket, "SUCCESS: Login successful");
+                        std::cout << "User logged in: " << username << std::endl;
+                        send_to_client(client_socket, "SUCCESS");
                     }
                 }
             }
@@ -253,10 +258,11 @@ void handle_client(SOCKET_TYPE client_socket) {
                 if (online_users.find(recipient) != online_users.end()) {
                     std::string full_msg = "[PM] " + username + " (" + get_current_time() + "):" + message;
                     send_to_client(online_users[recipient], full_msg);
-                    send_to_client(client_socket, "SUCCESS: Message sent");
+                    std::cout << "PM sent from " << username << " to " << recipient << std::endl;
+                    send_to_client(client_socket, "SUCCESS");
                 }
                 else {
-                    send_to_client(client_socket, "ERROR: User not online");
+                    send_to_client(client_socket, "ERROR: User offline");
                 }
             }
             else if (command == "/create_group") {
@@ -266,7 +272,7 @@ void handle_client(SOCKET_TYPE client_socket) {
                 {
                     std::lock_guard<std::mutex> lock(groups_mutex);
                     if (groups.find(group_name) != groups.end()) {
-                        send_to_client(client_socket, "ERROR: Group already exists");
+                        send_to_client(client_socket, "ERROR: Group exists");
                     }
                     else {
                         groups[group_name] = { username };
@@ -275,7 +281,8 @@ void handle_client(SOCKET_TYPE client_socket) {
                         users[username].groups.insert(group_name);
 
                         save_data();
-                        send_to_client(client_socket, "SUCCESS: Group created");
+                        std::cout << "Group created: " << group_name << " (owner: " << username << ")" << std::endl;
+                        send_to_client(client_socket, "SUCCESS");
                     }
                 }
             }
@@ -286,7 +293,7 @@ void handle_client(SOCKET_TYPE client_socket) {
                 {
                     std::lock_guard<std::mutex> lock(groups_mutex);
                     if (groups.find(group_name) == groups.end()) {
-                        send_to_client(client_socket, "ERROR: Group doesn't exist");
+                        send_to_client(client_socket, "ERROR: Group not found");
                         continue;
                     }
                     groups[group_name].insert(username);
@@ -298,8 +305,9 @@ void handle_client(SOCKET_TYPE client_socket) {
                 }
 
                 save_data();
-                broadcast_to_group(group_name, "SYSTEM", username + " joined the group");
-                send_to_client(client_socket, "SUCCESS: Joined group");
+                broadcast_to_group(group_name, "SYSTEM", username + " joined group", true);
+                std::cout << "User joined group: " << username << " -> " << group_name << std::endl;
+                send_to_client(client_socket, "SUCCESS");
             }
             else if (command == "/msg_group") {
                 std::string group_name;
@@ -310,36 +318,90 @@ void handle_client(SOCKET_TYPE client_socket) {
                 {
                     std::lock_guard<std::mutex> lock(groups_mutex);
                     if (groups.find(group_name) == groups.end()) {
-                        send_to_client(client_socket, "ERROR: Group doesn't exist");
+                        send_to_client(client_socket, "ERROR: Group not found");
                         continue;
                     }
                     if (groups[group_name].find(username) == groups[group_name].end()) {
-                        send_to_client(client_socket, "ERROR: Not a member of this group");
+                        send_to_client(client_socket, "ERROR: Not in group");
                         continue;
                     }
                 }
 
                 broadcast_to_group(group_name, username, message);
-                send_to_client(client_socket, "SUCCESS: Message sent to group");
+                std::cout << "Group message sent to " << group_name << " by " << username << std::endl;
+                send_to_client(client_socket, "SUCCESS");
+            }
+            else if (command == "/users") {
+                std::lock_guard<std::mutex> lock(users_mutex);
+                std::string response = "USER LIST:\n";
+                for (const auto& user : users) {
+                    response += user.first + " - " + (user.second.online ? "Online" : "Offline") + "\n";
+                }
+                send_to_client(client_socket, response);
+            }
+            else if (command == "/groups") {
+                std::lock_guard<std::mutex> lock_groups(groups_mutex);
+                std::lock_guard<std::mutex> lock_online(online_mutex);
+
+                std::string response = "GROUP LIST:\n";
+                for (const auto& group : groups) {
+                    int online_count = 0;
+                    for (const auto& member : group.second) {
+                        if (online_users.find(member) != online_users.end()) {
+                            online_count++;
+                        }
+                    }
+                    response += group.first + " (" + std::to_string(group.second.size()) +
+                        " members, online: " + std::to_string(online_count) + ")\n";
+                }
+                send_to_client(client_socket, response);
+            }
+            else if (command == "/group_info") {
+                std::string group_name;
+                iss >> group_name;
+
+                std::lock_guard<std::mutex> lock_groups(groups_mutex);
+                std::lock_guard<std::mutex> lock_online(online_mutex);
+
+                if (groups.find(group_name) == groups.end()) {
+                    send_to_client(client_socket, "ERROR: Group not found");
+                    continue;
+                }
+
+                std::string response = "GROUP " + group_name + " MEMBERS:\n";
+                for (const auto& member : groups[group_name]) {
+                    std::string status = "offline";
+                    if (online_users.find(member) != online_users.end()) {
+                        status = "online";
+                    }
+                    response += " - " + member + " [" + status + "]\n";
+                }
+                send_to_client(client_socket, response);
             }
             else if (command == "/logout") {
                 break;
             }
+            else {
+                send_to_client(client_socket, "ERROR: Unknown command");
+            }
         }
     }
     catch (const std::exception& e) {
-        std::cerr << "Error in client handler: " << e.what() << "\n";
+        std::cerr << "Client error: " << e.what() << std::endl;
     }
     catch (...) {
-        std::cerr << "Unknown error in client handler\n";
+        std::cerr << "Unknown client error" << std::endl;
     }
 
     if (!username.empty()) {
-        std::lock_guard<std::mutex> lock(users_mutex);
-        std::lock_guard<std::mutex> lock_online(online_mutex);
+        {
+            std::lock_guard<std::mutex> lock(users_mutex);
+            std::lock_guard<std::mutex> lock_online(online_mutex);
 
-        users[username].online = false;
-        online_users.erase(username);
+            users[username].online = false;
+            online_users.erase(username);
+        }
+        std::cout << "User logged out: " << username << std::endl;
     }
     CLOSE_SOCKET(client_socket);
 }
@@ -361,19 +423,21 @@ void signal_handler(int signal) {
 #endif
 
 int main() {
-    load_data();
-
 #ifdef _WIN32
+    // Use default console encoding
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        std::cerr << "WSAStartup failed\n";
+        std::cerr << "Winsock init error" << std::endl;
         return 1;
     }
 #endif
 
+    std::cout << "Starting messenger server..." << std::endl;
+    load_data();
+
     SOCKET_TYPE server_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (server_socket == -1) {
-        std::cerr << "Socket creation failed\n";
+        std::cerr << "Socket creation error" << std::endl;
         return 1;
     }
     server_socket_global = server_socket;
@@ -392,17 +456,17 @@ int main() {
     server_addr.sin_port = htons(12345);
 
     if (bind(server_socket, (sockaddr*)&server_addr, sizeof(server_addr)) == -1) {
-        std::cerr << "Bind failed\n";
+        std::cerr << "Socket bind error" << std::endl;
         return 1;
     }
 
     if (listen(server_socket, 10) == -1) {
-        std::cerr << "Listen failed\n";
+        std::cerr << "Listen error" << std::endl;
         return 1;
     }
 
-    std::cout << "Server started on port 12345\n";
-    std::cout << "Press Ctrl+C to stop server and save data\n";
+    std::cout << "Server running on port 12345" << std::endl;
+    std::cout << "Press Ctrl+C to stop server and save data" << std::endl;
 
     while (running) {
         fd_set read_set;
@@ -414,7 +478,7 @@ int main() {
         int activity = select(server_socket + 1, &read_set, NULL, NULL, &timeout);
 
         if (activity < 0 && running) {
-            std::cerr << "Select error\n";
+            std::cerr << "Select error" << std::endl;
             continue;
         }
 
@@ -425,10 +489,13 @@ int main() {
 
             if (client_socket == -1) {
                 if (!running) break;
-                std::cerr << "Accept failed\n";
+                std::cerr << "Accept error" << std::endl;
                 continue;
             }
 
+            char client_ip[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
+            std::cout << "New connection: " << client_ip << ":" << ntohs(client_addr.sin_port) << std::endl;
             std::thread(handle_client, client_socket).detach();
         }
     }
@@ -440,6 +507,6 @@ int main() {
     WSACleanup();
 #endif
 
-    std::cout << "Server stopped. Data saved.\n";
+    std::cout << "Server stopped. Data saved." << std::endl;
     return 0;
 }
